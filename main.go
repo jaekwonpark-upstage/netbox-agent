@@ -17,20 +17,21 @@ import (
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/mem"
 
+	"github.com/digitalocean/go-netbox/netbox"
 	"github.com/digitalocean/go-netbox/netbox/client"
 	"github.com/digitalocean/go-netbox/netbox/client/dcim"
-	"github.com/digitalocean/go-netbox/netbox/client/tenancy"
 	"github.com/digitalocean/go-netbox/netbox/client/ipam"
 	"github.com/digitalocean/go-netbox/netbox/client/virtualization"
-	"github.com/digitalocean/go-netbox/netbox/models"
-	"github.com/go-openapi/strfmt"
-	"github.com/go-openapi/strfmt/conv"
-	"log"
 )
 
 const (
-	netboxAPIURL  = ""
-	netboxAPIToken = ""
+	netboxAPIURL    = "YOUR_NETBOX_API_URL"
+	netboxAPIToken  = "YOUR_NETBOX_API_TOKEN"
+	deviceRole      = "Server"
+	region          = "Seoul"
+	site            = "Temp"
+	platform        = "OS 종류"
+	interfaceType   = "1000BASE-T"
 )
 
 type BlockDevice struct {
@@ -130,8 +131,6 @@ func main() {
 						domain, err := getPTRRecord(ipAddr)
 						if err == nil && domain != "" {
 							fmt.Println("도메인 이름:", domain)
-
-							}
 						}
 					}
 				}
@@ -202,6 +201,25 @@ func main() {
 		if err != nil {
 			fmt.Println("Error:", err)
 		}
+	}
+
+	// Netbox API 클라이언트 생성
+	httpClient := &http.Client{}
+	netboxClient, err := netbox.NewNetboxWithAPIKey(netboxAPIURL, httpClient, netboxAPIToken)
+	if err != nil {
+		log.Fatalf("Failed to create Netbox client: %v", err)
+	}
+
+	// 도메인 이름으로 Devices 검색 및 생성
+	deviceID, err := searchOrCreateDevice(netboxClient, domainName)
+	if err != nil {
+		log.Fatalf("Failed to search or create device: %v", err)
+	}
+
+	// Components 추가
+	err = addComponents(netboxClient, deviceID)
+	if err != nil {
+		log.Fatalf("Failed to add components: %v", err)
 	}
 
 
@@ -585,6 +603,152 @@ func printIPMISystemLogs() error {
 		err := ioutil.WriteFile(logFilePath, []byte(newLogContent), 0644)
 		if err != nil {
 			return fmt.Errorf("파일 쓰기 중 오류 발생: %v", err)
+		}
+	}
+
+	return nil
+}
+
+func searchOrCreateDevice(netboxClient *netbox.Netbox, domainName string) (int64, error) {
+	// 도메인 이름으로 Devices 검색
+	deviceID, err := searchDevice(netboxClient, domainName)
+	if err != nil {
+		return 0, err
+	}
+
+	// Devices가 없으면 생성
+	if deviceID == 0 {
+		deviceID, err = createDevice(netboxClient, domainName)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return deviceID, nil
+}
+
+func searchDevice(netboxClient *netbox.Netbox, domainName string) (int64, error) {
+	// 기존 코드...
+
+	// 도메인 이름으로 Devices 검색하는 코드를 여기에 추가하세요.
+	params := dcim.NewDcimDevicesListParams().WithName(&domainName)
+	resp, err := netboxClient.Dcim.DcimDevicesList(params, nil)
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to search device: %v", err)
+	}
+
+	if len(resp.Payload.Results) > 0 {
+		return resp.Payload.Results[0].ID, nil
+	}
+
+	return 0, nil
+
+}
+
+func createDevice(netboxClient *netbox.Netbox, domainName string) (int64, error) {
+	// 기존 코드...
+
+	// 도메인 이름으로 Devices 생성하는 코드를 여기에 추가하세요.
+	roleID, err := createOrGetDeviceRoleID(netboxClient, deviceRole)
+	if err != nil {
+		return 0, err
+	}
+
+	// Device Type 생성 및 검색
+	typeID, err := createOrGetDeviceTypeID(netboxClient, productName, manufacturer)
+	if err != nil {
+		return 0, err
+	}
+
+	// Site 생성 및 검색
+	siteID, err := createOrGetSiteID(netboxClient, site)
+	if err != nil {
+		return 0, err
+	}
+
+	// Platform 생성 및 검색
+	platformID, err := createOrGetPlatformID(netboxClient, platform)
+	if err != nil {
+		return 0, err
+	}
+
+	// Device 생성
+	deviceParams := dcim.NewDcimDevicesCreateParams().WithData(&models.WritableDevice{
+		Name:         domainName,
+		DeviceRole:   roleID,
+		DeviceType:   typeID,
+		Serial:       serialNumber,
+		Site:         siteID,
+		Platform:     platformID,
+	})
+	resp, err := netboxClient.Dcim.DcimDevicesCreate(deviceParams, nil)
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to create device: %v", err)
+	}
+
+	return resp.Payload.ID, nil
+}
+
+func addComponents(netboxClient *netbox.Netbox, deviceID int64) error {
+	// Components 추가 코드를 여기에 추가하세요.
+
+	// Module bays 추가
+	err := addModuleBays(netboxClient, deviceID)
+	if err != nil {
+		return err
+	}
+
+	// Interfaces 추가
+	err = addInterfaces(netboxClient, deviceID)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+
+func addModuleBays(netboxClient *netbox.Netbox, deviceID int64) error {
+	moduleBayNames := []string{"GPU", "NIC", "Storage"}
+
+	for _, moduleName := range moduleBayNames {
+		// Module Type 생성 및 검색
+		moduleTypeID, err := createOrGetModuleTypeID(netboxClient, moduleName, manufacturer)
+		if err != nil {
+			return err
+		}
+
+		// Module Bay 생성
+		moduleBayParams := dcim.NewDcimDeviceBaysCreateParams().WithData(&models.WritableDeviceBay{
+			Device:   deviceID,
+			Name:     moduleName,
+			Type:     moduleTypeID,
+		})
+		_, err = netboxClient.Dcim.DcimDeviceBaysCreate(moduleBayParams, nil)
+
+		if err != nil {
+			return fmt.Errorf("failed to create module bay: %v", err)
+		}
+	}
+
+	return nil
+}
+
+func addInterfaces(netboxClient *netbox.Netbox, deviceID int64) error {
+	for _, nic := range nics {
+		// Interface 생성
+		interfaceParams := dcim.NewDcimInterfacesCreateParams().WithData(&models.WritableInterface{
+			Device:     deviceID,
+			Name:       nic.Name,
+			Type:       interfaceType,
+			MACAddress: nic.MACAddress,
+		})
+		_, err := netboxClient.Dcim.DcimInterfacesCreate(interfaceParams, nil)
+
+		if err != nil {
+			return fmt.Errorf("failed to create interface: %v", err)
 		}
 	}
 
